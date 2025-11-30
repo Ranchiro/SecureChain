@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: securechain-postgres
+    environment:
+      POSTGRES_DB: securechain
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secure_pass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MongoDB
+  mongodb:
+    image: mongo:6.0
+    container_name: securechain-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-secure_pass}
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: securechain-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+
+  # Backend API (Node.js/Express)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: securechain-backend
+    environment:
+      DATABASE_URL: postgresql://admin:${DB_PASSWORD:-secure_pass}@postgres:5432/securechain
+      MONGODB_URI: mongodb://admin:${MONGO_PASSWORD:-secure_pass}@mongodb:27017/securechain
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: ${NODE_ENV:-development}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./backend:/app
+
+  # ML Service (FastAPI/Python)
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    container_name: securechain-ml
+    environment:
+      REDIS_URL: redis://redis:6379
+      MODEL_PATH: /models
+    depends_on:
+      - redis
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ml-service:/app
+      - ml_models:/models
+
+  # Frontend (Node.js dev server)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: securechain-frontend
+    environment:
+      VITE_API_URL: http://localhost:3000
+      VITE_ML_SERVICE_URL: http://localhost:8000
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  postgres_data:
+  mongo_data:
+  redis_data:
+  ml_models:
+
+networks:
+  default:
+    name: securechain-network
